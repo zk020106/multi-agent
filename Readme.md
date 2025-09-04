@@ -1,6 +1,6 @@
 _# 多智能体系统架构（LangChain）
 
-## 目录结构（Tree 架构）
+## 目录结构
 ```graphql
 multi_agent_system/
 │

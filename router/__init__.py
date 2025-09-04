@@ -7,12 +7,13 @@ from .base_router import BaseRouter
 from .rule_router import RuleRouter
 from .llm_router import LLMRouter
 from .custom_router import CustomRouter
-from .router_factory import RouterFactory
+from .router_factory import RouterFactory,RouterType
 
 __all__ = [
     'BaseRouter',
     'RuleRouter',
     'LLMRouter',
     'CustomRouter',
-    'RouterFactory'
+    'RouterFactory',
+    'RouterType'
 ]
