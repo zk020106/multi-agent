@@ -454,14 +454,25 @@ def set_error_handler(handler: ErrorHandler) -> None:
 
 
 def handle_errors(
+    _func: Callable = None,
+    *,
     retry_strategy: RetryStrategy = None,
     fallback_handler: FallbackHandler = None,
     context: Dict[str, Any] = None
 ):
-    """错误处理装饰器工厂"""
+    """错误处理装饰器，支持两种用法：
+    - @handle_errors
+    - @handle_errors(retry_strategy=..., fallback_handler=..., context=...)
+    """
     def decorator(func: Callable) -> Callable:
         handler = ErrorHandler(retry_strategy, fallback_handler)
         return handler.handle_error(func, context=context)
+
+    # 兼容无参数用法：@handle_errors
+    if callable(_func):
+        return decorator(_func)
+
+    # 有参数用法：@handle_errors(...)
     return decorator
 
 

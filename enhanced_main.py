@@ -6,10 +6,11 @@
 import asyncio
 import os
 import time
-from typing import List, Dict, Any
+from typing import List
 
 from langchain_community.llms.openai import BaseOpenAI
 from langchain_openai import OpenAIEmbeddings
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from agents import AgentFactory, AgentType
 from coordinator import SequentialCoordinator
@@ -18,10 +19,9 @@ from memory import MemoryManager
 from schema import Task, TaskPriority
 from tools import get_all_tools
 from utils import setup_logging
-from utils.simple_config import SimpleConfig, ConfigManager, get_config_manager
-from utils.error_handler import ErrorHandler, ExponentialBackoffStrategy
+from utils.config import load_config
+from utils.monitoring import MonitoringManager
 from utils.performance_optimizer import PerformanceOptimizer, TaskPriority as PerfTaskPriority
-from utils.monitoring import MonitoringManager, get_monitoring_manager
 
 
 class EnhancedMultiAgentSystem:
@@ -48,9 +48,9 @@ class EnhancedMultiAgentSystem:
         # 设置日志
         setup_logging(level="INFO", use_colors=True)
         
-        # 初始化配置管理器
-        self.config_manager = ConfigManager(config_path)
-        self.config = self.config_manager.get_config()
+        # 加载配置（使用 utils.config 的配置结构）
+        cfg_path = config_path if config_path else str(os.path.join(os.getcwd(), "config.yaml"))
+        self.config = load_config(cfg_path)
         
         # 初始化组件
         self.agent_factory = AgentFactory()
@@ -79,7 +79,7 @@ class EnhancedMultiAgentSystem:
             max_agents=self.config.max_agents,
             min_agents=2,
             max_queue_size=1000,
-            max_concurrent_tasks=self.config.max_parallel_tasks
+            max_concurrent_tasks=self.config.coordinator.max_parallel_tasks
         )
         
         # 初始化监控管理器
@@ -87,19 +87,23 @@ class EnhancedMultiAgentSystem:
         self.monitoring_manager.add_agent_health_checker({})  # 稍后更新
         
         print("🚀 增强版多智能体系统初始化完成！")
-        print(f"📊 配置摘要: {self.config_manager.get_summary()}")
+        print(f"📊 配置摘要: provider={self.config.llm.provider}, model={self.config.llm.model}, memory={self.config.memory.type}, coordinator={self.config.coordinator.type}")
     
     def _init_llm(self):
         """初始化大语言模型"""
         try:
-            # 使用OpenAI模型
-            llm = BaseOpenAI(
-                model=self.config.llm_model,
-                temperature=self.config.llm_temperature,
-                max_tokens=self.config.llm_max_tokens,
-                api_key=self.config.llm_api_key
-            )
-            print(f"✅ LLM初始化成功: {self.config.llm_model}")
+            # 使用 ChatOpenAI 对话模型
+            llm_kwargs = {
+                "model": self.config.llm.model,
+                "temperature": self.config.llm.temperature,
+                "api_key": self.config.llm.api_key,
+                "max_tokens": self.config.llm.max_tokens,
+            }
+            if self.config.llm.base_url:
+                llm_kwargs["base_url"] = self.config.llm.base_url
+
+            llm = ChatOpenAI(**llm_kwargs)
+            print(f"✅ LLM初始化成功: {self.config.llm.model}")
             return llm
         except Exception as e:
             print(f"❌ LLM初始化失败: {e}")
@@ -110,15 +114,16 @@ class EnhancedMultiAgentSystem:
     def _init_embeddings(self):
         """初始化嵌入模型"""
         try:
-            embeddings = OpenAIEmbeddings(
-                api_key=self.config.llm_api_key
-            )
+            emb_kwargs = {"api_key": self.config.llm.api_key}
+            if self.config.llm.base_url:
+                emb_kwargs["base_url"] = self.config.llm.base_url
+            embeddings = OpenAIEmbeddings(**emb_kwargs)
             print("✅ 嵌入模型初始化成功")
             return embeddings
         except Exception as e:
             print(f"❌ 嵌入模型初始化失败: {e}")
             return None
-    
+
     def create_agent(
         self,
         agent_type: AgentType,
@@ -295,7 +300,17 @@ class EnhancedMultiAgentSystem:
             "memory_stats": self.memory_manager.get_memory_stats(),
             "performance_metrics": self.performance_optimizer.get_performance_metrics(),
             "monitoring_metrics": self.monitoring_manager.get_metrics_summary(),
-            "config_summary": self.config_manager.get_summary()
+            "config_summary": {
+                "system_name": self.config.system_name,
+                "debug": self.config.debug,
+                "log_level": self.config.log_level,
+                "llm_provider": self.config.llm.provider,
+                "llm_model": self.config.llm.model,
+                "memory_type": self.config.memory.type,
+                "coordinator_type": self.config.coordinator.type,
+                "max_agents": self.config.max_agents,
+                "max_parallel_tasks": self.config.coordinator.max_parallel_tasks
+            }
         }
         return status
     
@@ -486,12 +501,12 @@ async def performance_test():
 
 if __name__ == "__main__":
     # 设置环境变量（如果没有配置文件）
-    if not os.getenv("OPENAI_API_KEY"):
-        print("⚠️  未设置OPENAI_API_KEY环境变量，将使用模拟LLM")
+    # if not os.getenv("OPENAI_API_KEY"):
+    #     print("⚠️  未设置OPENAI_API_KEY环境变量，将使用模拟LLM")
     
     # 运行增强版演示
     asyncio.run(enhanced_demo())
     
     # 运行性能测试
     print("\n" + "="*60)
-    asyncio.run(performance_test())
+    # asyncio.run(performance_test())

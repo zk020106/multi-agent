@@ -5,14 +5,14 @@
 
 from .base_agent import BaseAgent
 from .react_agent import ReActAgent
-from .plan_execute_agent import PlanExecuteAgent
+from .plan_execute_agent import LangChainPlanExecuteAgent
 from .tool_agent import ToolAgent
 from .agent_factory import AgentFactory,AgentType
 
 __all__ = [
     'BaseAgent',
     'ReActAgent', 
-    'PlanExecuteAgent',
+    'LangChainPlanExecuteAgent',
     'ToolAgent',
     'AgentFactory',
     'AgentType'

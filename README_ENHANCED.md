@@ -69,22 +69,29 @@ pip install -r requirements.txt
 
 ### 2. 配置系统
 
-创建配置文件 `config.yaml`:
+创建配置文件 `config.yaml`（与 `utils.config` 结构一致，YAML 优先级高于默认值）:
 
 ```yaml
 system_name: "智能多智能体系统"
 debug: false
 log_level: "INFO"
 
-# LLM设置
-llm_provider: "openai"
-llm_model: "gpt-3.5-turbo"
-llm_api_key: "${OPENAI_API_KEY}"
+database:
+  type: "sqlite"
+  url: "sqlite:///multi_agent.db"
 
-# 性能设置
-max_agents: 10
-max_parallel_tasks: 5
-task_timeout: 300
+llm:
+  provider: "openai"
+  model: "gpt-3.5-turbo"
+  api_key: "${OPENAI_API_KEY}"
+  # base_url: https://your-proxy.example.com/v1   # 若使用代理，至 /v1 即可
+  temperature: 0.7
+  max_tokens: 1000
+
+coordinator:
+  type: "sequential"
+  max_parallel_tasks: 5
+  timeout: 300
 
 # 监控设置
 custom_settings:
@@ -149,6 +156,11 @@ if __name__ == "__main__":
 - **健康检查**: 系统和组件的健康状态
 
 ## 🔧 高级配置
+### 配置优先级与 base_url 说明
+
+- 配置优先级: 程序通过 `utils.config.load_config("config.yaml")` 加载，YAML 中的值会覆盖 `utils/config.py` 的 dataclass 默认值；缺失项回落到默认值。
+- 结构要求: 需使用嵌套键，如 `llm.base_url` 覆盖 `LLMConfig.base_url`。旧的扁平键（如 `llm_base_url`）不会生效。
+- base_url 规范: 若使用代理，请将 `llm.base_url` 设为纯 base 地址（如 `https://proxy.example.com/v1`），不要包含 `/chat/completions` 或 `/completions`。
 
 ### 智能体选择策略
 
@@ -255,13 +267,10 @@ asyncio.run(performance_test())
 ### 验证配置
 
 ```python
-from utils.simple_config import validate_config_file
+from utils.config import load_config
 
-errors = validate_config_file("config.yaml")
-if errors:
-    print(f"配置错误: {errors}")
-else:
-    print("配置验证通过")
+config = load_config("config.yaml")
+print("配置加载成功", config.llm.model)
 ```
 
 ## 🔍 故障排除
@@ -312,8 +321,8 @@ logging.basicConfig(level=logging.DEBUG)
 
 ### 配置类
 
-- `SimpleConfig`: 简化配置类
-- `ConfigManager`: 配置管理器
+- `Config`: 主配置类
+- `LLMConfig` / `DatabaseConfig` / `MemoryConfig` / `CoordinatorConfig`
 
 ### 监控类
 

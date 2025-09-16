@@ -29,6 +29,7 @@ class LLMConfig:
     provider: str = "openai"  # openai, anthropic, local
     model: str = "gpt-3.5-turbo"
     api_key: str = ""
+    # 建议到 /v1 为止，不要包含 /chat/completions 或 /completions
     base_url: Optional[str] = None
     temperature: float = 0.7
     max_tokens: int = 1000
@@ -72,6 +73,7 @@ class Config:
     # 智能体设置
     max_agents: int = 10
     agent_timeout: int = 60
+    max_parallel_tasks: int = 10
 
     # 工具设置
     tool_timeout: int = 30
@@ -121,6 +123,7 @@ class Config:
             'agent_timeout': self.agent_timeout,
             'tool_timeout': self.tool_timeout,
             'max_tool_retries': self.max_tool_retries,
+            'max_parallel_tasks': self.max_parallel_tasks,
             'custom': self.custom
         }
 

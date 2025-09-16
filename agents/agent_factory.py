@@ -11,7 +11,7 @@ from langchain_core.memory import BaseMemory
 from langchain_core.tools import BaseTool
 
 from .base_agent import BaseAgent
-from .plan_execute_agent import PlanExecuteAgent
+from .plan_execute_agent import LangChainPlanExecuteAgent
 from .react_agent import ReActAgent
 from .tool_agent import ToolAgent
 
@@ -33,7 +33,7 @@ class AgentFactory:
     # 智能体类型映射
     AGENT_CLASSES: Dict[AgentType, Type[BaseAgent]] = {
         AgentType.REACT: ReActAgent,
-        AgentType.PLAN_EXECUTE: PlanExecuteAgent,
+        AgentType.PLAN_EXECUTE: LangChainPlanExecuteAgent,
         AgentType.TOOL: ToolAgent
     }
     
@@ -156,7 +156,7 @@ class AgentFactory:
         system_prompt: str = "",
         max_plan_steps: int = 10,
         **kwargs
-    ) -> PlanExecuteAgent:
+    ) -> LangChainPlanExecuteAgent:
         """
         创建计划执行智能体
         
