@@ -5,10 +5,10 @@
 
 from .langchain_tools import (
     APITool, DatabaseTool, DocumentSearchTool, 
-    CodeExecutionTool, WebSearchTool, CalculatorTool,get_all_tools
+    CodeExecutionTool, CalculatorTool,get_all_tools
 )
 
 __all__ = [
     'APITool', 'DatabaseTool', 'DocumentSearchTool',
-    'CodeExecutionTool', 'WebSearchTool', 'CalculatorTool','get_all_tools'
+    'CodeExecutionTool',  'CalculatorTool','get_all_tools'
 ]

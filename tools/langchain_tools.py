@@ -8,7 +8,12 @@ import os
 import sqlite3
 import subprocess
 import tempfile
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, Tuple, Literal
+import sys
+from typing import Any, Dict, List, Optional, Type, Tuple
+import os
+import time
+from utils.config import get_config
 
 import requests
 from langchain_core.tools import BaseTool
@@ -153,7 +158,7 @@ class DatabaseTool(BaseTool):
 class DocumentSearchToolInput(BaseModel):
     """文档搜索工具输入模型"""
     query: str = Field(description="搜索查询")
-    document_path: str = Field(description="文档文件路径")
+    document_path: Optional[str] = Field(default=None, description="文档文件路径（可选，不提供则跳过文档搜索）")
     max_results: Optional[int] = Field(default=5, description="最大结果数量")
 
 
@@ -167,7 +172,7 @@ class DocumentSearchTool(BaseTool):
     def _run(
         self,
         query: str,
-        document_path: str,
+        document_path: Optional[str] = None,
         max_results: Optional[int] = 5,
         **kwargs
     ) -> str:
@@ -183,6 +188,9 @@ class DocumentSearchTool(BaseTool):
             搜索结果
         """
         try:
+            # 若未提供文档路径，优雅跳过，避免触发参数校验错误
+            if not document_path:
+                return "未提供文档路径，跳过文档搜索。"
             if not os.path.exists(document_path):
                 return f"文档文件不存在: {document_path}"
             
@@ -217,7 +225,8 @@ class DocumentSearchTool(BaseTool):
 class CodeExecutionToolInput(BaseModel):
     """代码执行工具输入模型"""
     code: str = Field(description="要执行的Python代码")
-    language: str = Field(default="python", description="编程语言")
+    language: Literal["python"] = Field(default="python", description="编程语言")
+    sandbox: Literal["restricted", "none"] = Field(default="restricted", description="执行沙箱模式：restricted 使用 RestrictedPython，none 使用子进程")
 
 
 class CodeExecutionTool(BaseTool):
@@ -231,95 +240,164 @@ class CodeExecutionTool(BaseTool):
         self,
         code: str,
         language: str = "python",
+        sandbox: str = "restricted",
         **kwargs
-    ) -> str:
+    ) -> Dict[str, Any]:
         """
-        执行代码
-        
-        Args:
-            code: 要执行的代码
-            language: 编程语言
-            
-        Returns:
-            执行结果
+        执行代码（仅支持 Python）。默认使用 RestrictedPython 沙箱。
+        sandbox:
+          - restricted: 使用 RestrictedPython 安全执行（推荐）
+          - none: 使用子进程执行（不隔离，仅限受信任环境）
         """
         if language.lower() != "python":
-            return f"暂不支持 {language} 语言，仅支持Python"
-        
-        try:
-            # 创建临时文件
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-                f.write(code)
-                temp_file = f.name
-            
+            return {"success": False, "error": f"暂不支持 {language} 语言，仅支持Python"}
+
+        if sandbox == "restricted":
             try:
-                # 执行代码
-                result = subprocess.run(
-                    ['python', temp_file],
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
-                
-                output = {
-                    "return_code": result.returncode,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr
+                from RestrictedPython import compile_restricted
+                from RestrictedPython import safe_globals, limited_builtins
+            except Exception as e:
+                return {"success": False, "error": f"RestrictedPython 未安装或不可用: {e}. 可设置 sandbox='none' 退回子进程执行。"}
+
+            try:
+                byte_code = compile_restricted(code, filename='<restricted>', mode='exec')
+                exec_globals: Dict[str, Any] = dict(safe_globals)
+                # 提供极少量安全内建
+                exec_globals['__builtins__'] = limited_builtins
+                exec_locals: Dict[str, Any] = {}
+
+                # 捕获输出
+                import io
+                import contextlib
+                stdout_capture = io.StringIO()
+                with contextlib.redirect_stdout(stdout_capture):
+                    exec(byte_code, exec_globals, exec_locals)
+                return {
+                    "success": True,
+                    "return_code": 0,
+                    "stdout": stdout_capture.getvalue(),
+                    "stderr": "",
                 }
-                
-                if result.returncode == 0:
-                    return f"代码执行成功:\n{result.stdout}"
-                else:
-                    return f"代码执行失败:\n{result.stderr}"
-                    
-            finally:
-                # 清理临时文件
-                os.unlink(temp_file)
-                
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
+        # 非沙箱模式：子进程执行（不安全，仅限受信任环境）
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(code)
+            temp_file = f.name
+
+        try:
+            result = subprocess.run(
+                [sys.executable, temp_file],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            return {
+                "success": result.returncode == 0,
+                "return_code": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
         except subprocess.TimeoutExpired:
-            return "代码执行超时（30秒）"
+            return {"success": False, "error": "代码执行超时（30秒）"}
         except Exception as e:
-            return f"代码执行失败: {str(e)}"
+            return {"success": False, "error": str(e)}
+        finally:
+            try:
+                os.unlink(temp_file)
+            except Exception:
+                pass
 
 
-class WebSearchToolInput(BaseModel):
-    """网络搜索工具输入模型"""
-    query: str = Field(description="搜索查询")
-    max_results: Optional[int] = Field(default=5, description="最大结果数量")
 
 
-class WebSearchTool(BaseTool):
-    """网络搜索工具（简化版本）"""
-    
-    name: str = "web_search_tool"
-    description: str = "模拟网络搜索功能"
-    args_schema: Type[BaseModel] = WebSearchToolInput
-    
+class SerperSearchToolInput(BaseModel):
+    """Serper 联网搜索工具输入模型"""
+    query: str = Field(description="搜索查询关键词")
+    gl: Optional[str] = Field(default="us", description="地域，如 cn/us")
+    hl: Optional[str] = Field(default="en", description="语言，如 zh-cn/en")
+    num: Optional[int] = Field(default=10, description="返回结果数量")
+    api_key: Optional[str] = Field(default=None, description="Serper API Key（可选，默认读环境变量 SERPER_API_KEY）")
+
+
+class SerperSearchTool(BaseTool):
+    """基于 Serper 的联网搜索工具"""
+
+    name: str = "serper_search"
+    description: str = "使用 Serper（google.serper.dev）进行网络搜索"
+    args_schema: Type[BaseModel] = SerperSearchToolInput
+
     def _run(
         self,
         query: str,
-        max_results: Optional[int] = 5,
+        gl: Optional[str] = "us",
+        hl: Optional[str] = "en",
+        num: Optional[int] = 10,
+        api_key: Optional[str] = None,
         **kwargs
     ) -> str:
-        """
-        执行网络搜索（模拟版本）
-        
-        Args:
-            query: 搜索查询
-            max_results: 最大结果数量
-            
-        Returns:
-            搜索结果
-        """
         try:
-            # 模拟搜索结果
-            result = f"模拟搜索结果 for '{query}':\n"
-            result += f"1. 相关结果 1\n"
-            result += f"2. 相关结果 2\n"
-            result += f"3. 相关结果 3\n"
-            return result
+            # 规范化查询，去除多余引号/空白
+            norm_query = (query or "").strip().strip('"').strip("'")
+            if not norm_query:
+                return "Serper 搜索失败: query 不能为空"
+
+            if api_key:
+                key = api_key
+            else:
+                # 优先从全局配置读取，其次环境变量
+                try:
+                    cfg = get_config()
+                    key = (cfg.serper_api_key if hasattr(cfg, 'serper_api_key') else None) or os.getenv("SERPER_API_KEY")
+                    cooldown = getattr(cfg, 'serper_cooldown_seconds', 5) if hasattr(cfg, 'serper_cooldown_seconds') else 5
+                except Exception:
+                    key = os.getenv("SERPER_API_KEY")
+                    cooldown = 5
+            if not key:
+                return "Serper API Key 未设置。请传入 api_key 或设置环境变量 SERPER_API_KEY。"
+
+            # 简单去重/冷却窗口：短时间内重复请求直接返回缓存
+            cache_key = f"{norm_query}|{gl}|{hl}|{num}"
+            cached = _SERPER_CACHE.get(cache_key)
+            if cached and (time.time() - cached[0]) < cooldown:
+                return json.dumps({
+                    "status_code": 200,
+                    "data": cached[1],
+                    "cached": True
+                }, ensure_ascii=False, indent=2)
+
+            url = "https://google.serper.dev/search"
+            headers = {
+                "X-API-KEY": key,
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "q": norm_query,
+                "gl": gl,
+                "hl": hl,
+                "num": num,
+            }
+
+            resp = requests.post(url, headers=headers, json=payload, timeout=30)
+            try:
+                data = resp.json()
+            except json.JSONDecodeError:
+                data = resp.text
+
+            # 写入缓存
+            try:
+                _SERPER_CACHE[cache_key] = (time.time(), data)
+            except Exception:
+                pass
+
+            return json.dumps({
+                "status_code": resp.status_code,
+                "data": data
+            }, ensure_ascii=False, indent=2)
+
         except Exception as e:
-            return f"网络搜索失败: {str(e)}"
+            return f"Serper 搜索失败: {str(e)}"
 
 
 class CalculatorToolInput(BaseModel):
@@ -368,13 +446,16 @@ class CalculatorTool(BaseTool):
 
 # 工具注册表
 AVAILABLE_TOOLS = {
-    "api": APITool,
+    # "api": APITool,                        # 暂不启用
     "database": DatabaseTool,
-    "document_search": DocumentSearchTool,
+    # "document_search": DocumentSearchTool, # 暂不启用
     "code_execution": CodeExecutionTool,
-    "web_search": WebSearchTool,
+    "serper_search": SerperSearchTool,
     "calculator": CalculatorTool
 }
+
+# 简单的进程级缓存：key -> (timestamp, payload)
+_SERPER_CACHE: Dict[str, Tuple[float, Any]] = {}
 
 
 def get_tool(tool_name: str) -> Optional[BaseTool]:

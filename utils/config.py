@@ -81,6 +81,8 @@ class Config:
 
     # 自定义设置
     custom: Dict[str, Any] = field(default_factory=dict)
+    # 第三方集成
+    serper_api_key: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """将配置转换为字典。"""
@@ -124,7 +126,8 @@ class Config:
             'tool_timeout': self.tool_timeout,
             'max_tool_retries': self.max_tool_retries,
             'max_parallel_tasks': self.max_parallel_tasks,
-            'custom': self.custom
+            'custom': self.custom,
+            'serper_api_key': self.serper_api_key
         }
 
     @classmethod
@@ -190,6 +193,8 @@ class Config:
         config.tool_timeout = data.get('tool_timeout', config.tool_timeout)
         config.max_tool_retries = data.get('max_tool_retries', config.max_tool_retries)
         config.custom = data.get('custom', config.custom)
+        # 第三方集成
+        config.serper_api_key = data.get('serper_api_key', config.serper_api_key)
 
         return config
 

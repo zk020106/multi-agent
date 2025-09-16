@@ -7,6 +7,7 @@ import asyncio
 import os
 import time
 from typing import List
+import logging
 
 from langchain_community.llms.openai import BaseOpenAI
 from langchain_openai import OpenAIEmbeddings
@@ -19,7 +20,7 @@ from memory import MemoryManager
 from schema import Task, TaskPriority
 from tools import get_all_tools
 from utils import setup_logging
-from utils.config import load_config
+from utils.config import load_config, set_config
 from utils.monitoring import MonitoringManager
 from utils.performance_optimizer import PerformanceOptimizer, TaskPriority as PerfTaskPriority
 
@@ -47,10 +48,13 @@ class EnhancedMultiAgentSystem:
         """
         # 设置日志
         setup_logging(level="INFO", use_colors=True)
+        self.logger = logging.getLogger("enhanced_main")
         
         # 加载配置（使用 utils.config 的配置结构）
         cfg_path = config_path if config_path else str(os.path.join(os.getcwd(), "config.yaml"))
         self.config = load_config(cfg_path)
+        # 设置为全局配置，供工具等组件统一读取
+        set_config(self.config)
         
         # 初始化组件
         self.agent_factory = AgentFactory()
@@ -60,14 +64,14 @@ class EnhancedMultiAgentSystem:
         # 初始化LLM
         if llm is not None:
             self.llm = llm
-            print(f"✅ 使用自定义LLM: {type(llm).__name__}")
+            self.logger.info(f"✅ 使用自定义LLM: {type(llm).__name__}")
         else:
             self.llm = self._init_llm()
         
         # 初始化嵌入模型
         if embeddings is not None:
             self.embeddings = embeddings
-            print(f"✅ 使用自定义嵌入模型: {type(embeddings).__name__}")
+            self.logger.info(f"✅ 使用自定义嵌入模型: {type(embeddings).__name__}")
         else:
             self.embeddings = self._init_embeddings()
         
@@ -86,8 +90,8 @@ class EnhancedMultiAgentSystem:
         self.monitoring_manager = MonitoringManager(enable_system_metrics=True)
         self.monitoring_manager.add_agent_health_checker({})  # 稍后更新
         
-        print("🚀 增强版多智能体系统初始化完成！")
-        print(f"📊 配置摘要: provider={self.config.llm.provider}, model={self.config.llm.model}, memory={self.config.memory.type}, coordinator={self.config.coordinator.type}")
+        self.logger.info("🚀 增强版多智能体系统初始化完成！")
+        self.logger.info(f"📊 配置摘要: provider={self.config.llm.provider}, model={self.config.llm.model}, memory={self.config.memory.type}, coordinator={self.config.coordinator.type}")
     
     def _init_llm(self):
         """初始化大语言模型"""
@@ -103,10 +107,10 @@ class EnhancedMultiAgentSystem:
                 llm_kwargs["base_url"] = self.config.llm.base_url
 
             llm = ChatOpenAI(**llm_kwargs)
-            print(f"✅ LLM初始化成功: {self.config.llm.model}")
+            self.logger.info(f"✅ LLM初始化成功: {self.config.llm.model}")
             return llm
         except Exception as e:
-            print(f"❌ LLM初始化失败: {e}")
+            self.logger.error(f"❌ LLM初始化失败: {e}")
             # 使用模拟LLM
             from langchain_community.llms import FakeListLLM
             return FakeListLLM(responses=["这是一个模拟响应"])
@@ -118,10 +122,10 @@ class EnhancedMultiAgentSystem:
             if self.config.llm.base_url:
                 emb_kwargs["base_url"] = self.config.llm.base_url
             embeddings = OpenAIEmbeddings(**emb_kwargs)
-            print("✅ 嵌入模型初始化成功")
+            self.logger.info("✅ 嵌入模型初始化成功")
             return embeddings
         except Exception as e:
-            print(f"❌ 嵌入模型初始化失败: {e}")
+            self.logger.error(f"❌ 嵌入模型初始化失败: {e}")
             return None
 
     def create_agent(
@@ -167,7 +171,7 @@ class EnhancedMultiAgentSystem:
         # 添加到性能优化器
         self.performance_optimizer.add_agent(agent_id, agent)
         
-        print(f"✅ 智能体创建成功: {name} ({agent_type.value})")
+        self.logger.info(f"✅ 智能体创建成功: {name} ({agent_type.value})")
         return agent
     
     def create_coordinator(
@@ -196,7 +200,7 @@ class EnhancedMultiAgentSystem:
             raise ValueError(f"不支持的协调器类型: {coordinator_type}")
         
         self.coordinators[coordinator_id] = coordinator
-        print(f"✅ 协调器创建成功: {name} ({coordinator_type})")
+        self.logger.info(f"✅ 协调器创建成功: {name} ({coordinator_type})")
         return coordinator
     
     def add_agent_to_coordinator(self, coordinator_id: str, agent_id: str, role: str = "general"):
@@ -213,9 +217,9 @@ class EnhancedMultiAgentSystem:
         
         if coordinator and agent:
             coordinator.add_agent(agent, role)
-            print(f"✅ 智能体 {agent.name} 已添加到协调器 {coordinator.name}")
+            self.logger.info(f"✅ 智能体 {agent.name} 已添加到协调器 {coordinator.name}")
         else:
-            print("❌ 协调器或智能体不存在")
+            self.logger.error("❌ 协调器或智能体不存在")
     
     async def execute_task(self, coordinator_id: str, task: Task):
         """
@@ -230,7 +234,7 @@ class EnhancedMultiAgentSystem:
             print(f"❌ 协调器 {coordinator_id} 不存在")
             return None
         
-        print(f"🎯 开始执行任务: {task.title}")
+        self.logger.info(f"🎯 开始执行任务: {task.title}")
         
         # 记录任务开始时间
         start_time = time.time()
@@ -244,16 +248,16 @@ class EnhancedMultiAgentSystem:
             self.monitoring_manager.record_task_metric(task.id, execution_time, success)
             
             if success:
-                print(f"✅ 任务执行成功: {task.title}")
+                self.logger.info(f"✅ 任务执行成功: {task.title}")
             else:
-                print(f"❌ 任务执行失败: {task.title} - {result.error_message}")
+                self.logger.error(f"❌ 任务执行失败: {task.title} - {result.error_message}")
             
             return result
             
         except Exception as e:
             execution_time = time.time() - start_time
             self.monitoring_manager.record_task_metric(task.id, execution_time, False)
-            print(f"❌ 任务执行异常: {task.title} - {str(e)}")
+            self.logger.error(f"❌ 任务执行异常: {task.title} - {str(e)}")
             return None
     
     async def execute_task_with_optimization(self, task: Task, priority: PerfTaskPriority = PerfTaskPriority.NORMAL):
@@ -264,7 +268,7 @@ class EnhancedMultiAgentSystem:
             task: 任务对象
             priority: 任务优先级
         """
-        print(f"🎯 使用性能优化器执行任务: {task.title}")
+        self.logger.info(f"🎯 使用性能优化器执行任务: {task.title}")
         
         # 提交任务到性能优化器
         success = await self.performance_optimizer.submit_task(
@@ -275,16 +279,16 @@ class EnhancedMultiAgentSystem:
         )
         
         if not success:
-            print(f"❌ 任务提交失败: {task.title}")
+            self.logger.error(f"❌ 任务提交失败: {task.title}")
             return None
         
         # 处理任务
         result = await self.performance_optimizer.process_next_task()
         
         if result:
-            print(f"✅ 任务处理成功: {task.title}")
+            self.logger.info(f"✅ 任务处理成功: {task.title}")
         else:
-            print(f"❌ 任务处理失败: {task.title}")
+            self.logger.error(f"❌ 任务处理失败: {task.title}")
         
         return result
     
@@ -425,9 +429,6 @@ async def enhanced_demo():
     print("\n🔧 执行性能优化:")
     optimization_result = system.optimize_performance()
     print(f"优化结果: {optimization_result}")
-    
-    print("\n🎉 增强版演示完成！")
-    print("🌐 监控仪表板: http://localhost:8080")
 
 
 async def performance_test():
