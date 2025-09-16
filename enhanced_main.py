@@ -6,7 +6,7 @@
 import asyncio
 import os
 import time
-from typing import List
+from typing import List, Any
 import logging
 
 from langchain_community.llms.openai import BaseOpenAI
@@ -221,7 +221,7 @@ class EnhancedMultiAgentSystem:
         else:
             self.logger.error("❌ 协调器或智能体不存在")
     
-    async def execute_task(self, coordinator_id: str, task: Task):
+    async def execute_task(self, coordinator_id: str, task: Task, callbacks: List[Any] = None):
         """
         执行任务
         
@@ -240,7 +240,7 @@ class EnhancedMultiAgentSystem:
         start_time = time.time()
         
         try:
-            result = await coordinator.coordinate(task)
+            result = await coordinator.coordinate(task, callbacks=callbacks)
             execution_time = time.time() - start_time
             
             # 记录监控指标

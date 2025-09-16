@@ -112,7 +112,7 @@ class SequentialCoordinator(BaseCoordinator):
         
         return list(set(capabilities))  # 去重
     
-    async def coordinate(self, task: Task) -> Result:
+    async def coordinate(self, task: Task, callbacks: List[Any] = None) -> Result:
         """
         协调执行任务（顺序模式）
         
@@ -125,7 +125,7 @@ class SequentialCoordinator(BaseCoordinator):
         async with self.execution_lock:
             return await self._execute_task_sequential(task)
     
-    async def _execute_task_sequential(self, task: Task) -> Result:
+    async def _execute_task_sequential(self, task: Task, callbacks: List[Any] = None) -> Result:
         """
         顺序执行任务
         
@@ -138,6 +138,13 @@ class SequentialCoordinator(BaseCoordinator):
         start_time = time.time()
         
         try:
+            # plan phase start
+            if callbacks:
+                for cb in callbacks:
+                    try:
+                        await cb.emit("plan_start", {"task_id": task.id, "title": task.title})
+                    except Exception:
+                        pass
             self.logger.info(f"开始顺序执行任务: {task.title}")
             
             # 检查任务依赖
@@ -164,7 +171,21 @@ class SequentialCoordinator(BaseCoordinator):
             # 分配任务
             self.assign_task_to_agent(task, agent)
             
+            # plan phase end
+            if callbacks:
+                for cb in callbacks:
+                    try:
+                        await cb.emit("plan_end", {"task_id": task.id})
+                    except Exception:
+                        pass
+
             # 执行任务
+            if callbacks:
+                for cb in callbacks:
+                    try:
+                        await cb.emit("execute_start", {"task_id": task.id, "agent_id": agent.agent_id})
+                    except Exception:
+                        pass
             result = await self._execute_with_agent(task, agent)
             
             # 完成任务
