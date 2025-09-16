@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 from agents import BaseAgent
 from schema import Task, Result, ResultStatus
 from .base_coordinator import BaseCoordinator
+from .smart_agent_selector import SmartAgentSelector, AgentCapability, SelectionStrategy
+from utils.error_handler import ErrorHandler, ExponentialBackoffStrategy, handle_errors
 
 
 class SequentialCoordinator(BaseCoordinator):
@@ -29,7 +31,8 @@ class SequentialCoordinator(BaseCoordinator):
         coordinator_id: str,
         name: str = "顺序执行协调器",
         description: str = "按顺序执行任务的协调器",
-        max_concurrent_tasks: int = 1
+        max_concurrent_tasks: int = 1,
+        selection_strategy: SelectionStrategy = SelectionStrategy.HYBRID
     ):
         """
         初始化顺序执行协调器
@@ -39,6 +42,7 @@ class SequentialCoordinator(BaseCoordinator):
             name: 协调器名称
             description: 协调器描述
             max_concurrent_tasks: 最大并发任务数
+            selection_strategy: 智能体选择策略
         """
         super().__init__(coordinator_id, name, description)
         
@@ -46,7 +50,67 @@ class SequentialCoordinator(BaseCoordinator):
         self.task_queue: List[Task] = []
         self.execution_lock = asyncio.Lock()
         
-        self.logger.info(f"顺序执行协调器初始化完成，最大并发任务数: {max_concurrent_tasks}")
+        # 初始化智能选择器
+        self.agent_selector = SmartAgentSelector(strategy=selection_strategy)
+        
+        # 初始化错误处理器
+        self.error_handler = ErrorHandler(
+            retry_strategy=ExponentialBackoffStrategy(),
+            enable_logging=True
+        )
+        
+        self.logger.info(f"顺序执行协调器初始化完成，最大并发任务数: {max_concurrent_tasks}, 选择策略: {selection_strategy.value}")
+    
+    def add_agent(self, agent: BaseAgent, role: str = "general") -> None:
+        """
+        添加智能体到协调器
+        
+        Args:
+            agent: 智能体实例
+            role: 智能体角色
+        """
+        super().add_agent(agent, role)
+        
+        # 为智能体注册能力信息
+        capability = AgentCapability(
+            agent_id=agent.agent_id,
+            capabilities=self._extract_agent_capabilities(agent),
+            specializations=[role],
+            performance_score=0.8,  # 初始性能分数
+            success_rate=0.9,  # 初始成功率
+            avg_execution_time=30.0,  # 初始平均执行时间
+            current_load=0.0,  # 初始负载
+            last_activity=time.time()
+        )
+        self.agent_selector.register_agent_capability(capability)
+    
+    def _extract_agent_capabilities(self, agent: BaseAgent) -> List[str]:
+        """从智能体提取能力信息"""
+        capabilities = ["通用"]  # 默认能力
+        
+        # 基于智能体类型添加特定能力
+        agent_type = type(agent).__name__.lower()
+        if "react" in agent_type:
+            capabilities.extend(["推理", "分析", "问题解决"])
+        elif "plan" in agent_type:
+            capabilities.extend(["计划", "组织", "项目管理"])
+        elif "tool" in agent_type:
+            capabilities.extend(["工具使用", "执行", "操作"])
+        
+        # 基于可用工具添加能力
+        if hasattr(agent, 'tools') and agent.tools:
+            for tool in agent.tools:
+                tool_name = tool.name.lower()
+                if "search" in tool_name or "query" in tool_name:
+                    capabilities.append("搜索")
+                elif "calculate" in tool_name or "math" in tool_name:
+                    capabilities.append("计算")
+                elif "code" in tool_name or "python" in tool_name:
+                    capabilities.append("编程")
+                elif "translate" in tool_name:
+                    capabilities.append("翻译")
+        
+        return list(set(capabilities))  # 去重
     
     async def coordinate(self, task: Task) -> Result:
         """
@@ -108,6 +172,15 @@ class SequentialCoordinator(BaseCoordinator):
             
             execution_time = time.time() - start_time
             result.execution_time = execution_time
+            
+            # 更新智能体性能信息
+            if agent:
+                success = result.status == ResultStatus.SUCCESS
+                self.agent_selector.update_agent_performance(
+                    agent.agent_id, success, execution_time
+                )
+                # 更新负载信息
+                self.agent_selector.update_agent_load(agent.agent_id, 0.0)
             
             self.logger.info(f"任务 {task.title} 顺序执行完成，耗时: {execution_time:.2f}秒")
             
@@ -186,20 +259,17 @@ class SequentialCoordinator(BaseCoordinator):
         if not available_agents:
             return None
         
-        # 简单的选择策略：选择第一个可用的智能体
-        # 可以根据任务类型、智能体能力等进行更复杂的选择
-        selected_agent = available_agents[0]
+        # 使用智能选择器选择最佳智能体
+        selected_agent = self.agent_selector.select_agent(task, available_agents)
         
-        # 根据任务优先级调整选择
-        if task.priority.value == "urgent":
-            # 优先选择处理速度快的智能体
-            selected_agent = min(available_agents, key=lambda a: a.total_execution_time)
-        elif task.priority.value == "high":
-            # 选择成功率高的智能体
-            selected_agent = max(available_agents, key=lambda a: a.tasks_completed / max(1, a.tasks_completed + a.tasks_failed))
+        if selected_agent:
+            self.logger.info(f"智能选择器为任务 '{task.title}' 选择了智能体: {selected_agent.name}")
+        else:
+            self.logger.warning(f"智能选择器未能为任务 '{task.title}' 找到合适的智能体")
         
         return selected_agent
 
+    @handle_errors
     async def _execute_with_agent(self, task: Task, agent: BaseAgent) -> Result:
         """
         使用智能体执行任务
@@ -222,12 +292,23 @@ class SequentialCoordinator(BaseCoordinator):
             return result
 
         except Exception as e:
+            # 使用错误处理器处理异常
+            error_info = self.error_handler.error_classifier.classify_error(
+                e, 
+                context={
+                    "task_id": task.id,
+                    "agent_id": agent.agent_id,
+                    "task_title": task.title
+                }
+            )
+            
             return Result(
                 id=str(uuid.uuid4()),
                 task_id=task.id,
                 agent_id=agent.agent_id,
                 status=ResultStatus.ERROR,
-                error_message=f"智能体执行失败: {str(e)}"
+                error_message=f"智能体执行失败: {error_info.message}",
+                metadata={"error_info": error_info.__dict__}
             )
 
     def add_task_to_queue(self, task: Task) -> None:
@@ -283,7 +364,10 @@ class SequentialCoordinator(BaseCoordinator):
         base_status.update({
             "max_concurrent_tasks": self.max_concurrent_tasks,
             "queue_length": len(self.task_queue),
-            "execution_mode": "sequential"
+            "execution_mode": "sequential",
+            "selection_strategy": self.agent_selector.strategy.value,
+            "agent_selector_stats": self.agent_selector.get_selection_stats(),
+            "error_stats": self.error_handler.get_error_stats()
         })
         return base_status
     
