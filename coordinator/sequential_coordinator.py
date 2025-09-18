@@ -186,6 +186,15 @@ class SequentialCoordinator(BaseCoordinator):
                         await cb.emit("execute_start", {"task_id": task.id, "agent_id": agent.agent_id})
                     except Exception:
                         pass
+            # 将回调注入到智能体（若支持），并重建执行器以便回调生效
+            try:
+                if callbacks is not None and hasattr(agent, 'callbacks'):
+                    agent.callbacks = callbacks
+                    if hasattr(agent, '_create_agent_executor'):
+                        agent.agent_executor = agent._create_agent_executor()
+            except Exception:
+                pass
+
             result = await self._execute_with_agent(task, agent)
             
             # 完成任务

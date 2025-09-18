@@ -252,6 +252,27 @@ class CodeExecutionTool(BaseTool):
         if language.lower() != "python":
             return {"success": False, "error": f"暂不支持 {language} 语言，仅支持Python"}
 
+        # 预处理：去除 Markdown 代码块围栏与语言标签
+        normalized_code = code.strip()
+        if normalized_code.startswith("```") and normalized_code.endswith("```"):
+            # 去掉最外层围栏
+            normalized_code = normalized_code.strip("`")
+            # 处理形如 ```python\n... 的情况
+            if normalized_code.lower().startswith("python\n"):
+                normalized_code = normalized_code[len("python\n"):]
+        # 常见情况：包含围栏但未严格包裹整段
+        if "```" in normalized_code:
+            try:
+                start = normalized_code.find("```")
+                end = normalized_code.rfind("```")
+                if end > start >= 0:
+                    inner = normalized_code[start + 3:end]
+                    if inner.lower().startswith("python\n"):
+                        inner = inner[len("python\n"):]
+                    normalized_code = inner.strip()
+            except Exception:
+                pass
+
         if sandbox == "restricted":
             try:
                 from RestrictedPython import compile_restricted
@@ -260,7 +281,7 @@ class CodeExecutionTool(BaseTool):
                 return {"success": False, "error": f"RestrictedPython 未安装或不可用: {e}. 可设置 sandbox='none' 退回子进程执行。"}
 
             try:
-                byte_code = compile_restricted(code, filename='<restricted>', mode='exec')
+                byte_code = compile_restricted(normalized_code, filename='<restricted>', mode='exec')
                 exec_globals: Dict[str, Any] = dict(safe_globals)
                 # 提供极少量安全内建
                 exec_globals['__builtins__'] = limited_builtins
@@ -283,7 +304,7 @@ class CodeExecutionTool(BaseTool):
 
         # 非沙箱模式：子进程执行（不安全，仅限受信任环境）
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-            f.write(code)
+            f.write(normalized_code)
             temp_file = f.name
 
         try:
@@ -449,7 +470,7 @@ AVAILABLE_TOOLS = {
     # "api": APITool,                        # 暂不启用
     "database": DatabaseTool,
     # "document_search": DocumentSearchTool, # 暂不启用
-    "code_execution": CodeExecutionTool,
+    # "code_execution": CodeExecutionTool,   # ag-ui 默认禁用，避免误调用
     "serper_search": SerperSearchTool,
     "calculator": CalculatorTool
 }

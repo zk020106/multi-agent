@@ -106,7 +106,7 @@ class EnhancedMultiAgentSystem:
             if self.config.llm.base_url:
                 llm_kwargs["base_url"] = self.config.llm.base_url
 
-            llm = ChatOpenAI(**llm_kwargs)
+            llm = ChatOpenAI(**llm_kwargs, streaming=True)
             self.logger.info(f"✅ LLM初始化成功: {self.config.llm.model}")
             return llm
         except Exception as e:

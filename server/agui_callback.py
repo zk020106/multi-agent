@@ -59,4 +59,23 @@ class AguiEventStreamer(BaseCallbackHandler):
     async def on_tool_error(self, error: BaseException, **kwargs: Any) -> None:
         await self._emit("tool_error", {"error": str(error)})
 
+    # ===== Agent 层事件（ReAct 动作与结束） =====
+    async def on_agent_action(self, action, **kwargs: Any) -> None:
+        # action包含 tool / tool_input / log（思考片段）
+        try:
+            if getattr(action, "log", None):
+                await self._emit("thought", {"text": action.log})
+            await self._emit("tool_start", {"tool": getattr(action, "tool", None), "input": getattr(action, "tool_input", None)})
+        except Exception:
+            pass
+
+    async def on_agent_finish(self, finish, **kwargs: Any) -> None:
+        try:
+            output = None
+            if hasattr(finish, "return_values") and isinstance(finish.return_values, dict):
+                output = finish.return_values.get("output")
+            await self._emit("message", {"content": output or ""})
+        except Exception:
+            pass
+
 
