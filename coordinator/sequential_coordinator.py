@@ -118,12 +118,13 @@ class SequentialCoordinator(BaseCoordinator):
         
         Args:
             task: 要执行的任务
+            callbacks: 回调函数列表
             
         Returns:
             执行结果
         """
         async with self.execution_lock:
-            return await self._execute_task_sequential(task)
+            return await self._execute_task_sequential(task, callbacks)
     
     async def _execute_task_sequential(self, task: Task, callbacks: List[Any] = None) -> Result:
         """

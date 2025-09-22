@@ -189,32 +189,33 @@ async def agui_chat_stream(req: ChatRequest):
         runner = asyncio.create_task(run_coro)
 
         try:
-            while True:
-                done, _ = await asyncio.wait({runner}, timeout=0.01)
-                # drain queue
-                while not queue.empty():
-                    ag_event = await queue.get()
-                    # 使用 EventEncoder 编码事件
-                    yield encoder.encode(ag_event).encode("utf-8")
-                if runner in done:
-                    result = runner.result()
-                    content = result.data.get("output") if result and result.data else (result.error_message if result else "")
-                    
-                    # 发送最终消息内容
-                    if content:
-                        final_event = TextMessageContentEvent(
-                            message_id=message_id,
-                            delta=content
-                        )
-                        yield encoder.encode(final_event).encode("utf-8")
-                    break
-        finally:
-            # 结束事件
-            end_event = RunFinishedEvent(
+            # 修复：使用稳健的SSE模板，Consumer在连接建立后立即进入阻塞等待
+            # 发送连通性确认
+            yield encoder.encode(RunStartedEvent(
+                type=EventType.RUN_STARTED,
                 thread_id=req.session_id,
                 run_id=message_id
-            )
-            yield encoder.encode(end_event).encode("utf-8")
+            )).encode("utf-8")
+            
+            while True:
+                try:
+                    # 阻塞等待事件到达，这里会一直等待直到有事件
+                    ag_event = await asyncio.wait_for(queue.get(), timeout=10.0)  # 10秒超时用于心跳
+                    yield encoder.encode(ag_event).encode("utf-8")
+                    
+                    # 检查是否是结束事件，如果是则关闭连接
+                    if ag_event.type == EventType.RUN_FINISHED:
+                        break
+                        
+                except asyncio.TimeoutError:
+                    # 发送心跳保持连接活跃
+                    yield b":\n\n"
+                except Exception as e:
+                    print(f"事件生成器错误: {e}")
+                    break
+        finally:
+            # 连接已关闭，无需额外处理
+            pass
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -245,31 +246,34 @@ async def agui_chat_ws(ws: WebSocket):
             run_coro = system.execute_task(_coordinator_id, task, callbacks=callbacks)
             runner = asyncio.create_task(run_coro)
             try:
-                while True:
-                    done, _ = await asyncio.wait({runner}, timeout=0.01)
-                    while not queue.empty():
-                        ag_event = await queue.get()
-                        # 直接发送事件字典给前端
-                        await ws.send_json(ag_event.model_dump())
-                    if runner in done:
-                        result = runner.result()
-                        content = result.data.get("output") if result and result.data else (result.error_message if result else "")
-                        
-                        # 发送最终消息内容
-                        if content:
-                            final_event = TextMessageContentEvent(
-                                message_id=message_id,
-                                delta=content
-                            )
-                            await ws.send_json(final_event.model_dump())
-                        break
-            finally:
-                # 发送结束事件
-                end_event = RunFinishedEvent(
+                # 修复：使用稳健的WebSocket模板，Consumer在连接建立后立即进入阻塞等待
+                # 发送连通性确认
+                start_event = RunStartedEvent(
+                    type=EventType.RUN_STARTED,
                     thread_id=session_id,
                     run_id=message_id
                 )
-                await ws.send_json(end_event.model_dump())
+                await ws.send_json(start_event.model_dump())
+                
+                while True:
+                    try:
+                        # 阻塞等待事件到达，这里会一直等待直到有事件
+                        ag_event = await asyncio.wait_for(queue.get(), timeout=10.0)  # 10秒超时用于心跳
+                        await ws.send_json(ag_event.model_dump())
+                        
+                        # 检查是否是结束事件，如果是则关闭连接
+                        if ag_event.type == EventType.RUN_FINISHED:
+                            break
+                            
+                    except asyncio.TimeoutError:
+                        # 发送心跳保持连接活跃
+                        await ws.send_json({"type": "heartbeat", "timestamp": time.time()})
+                    except Exception as e:
+                        print(f"WebSocket事件生成器错误: {e}")
+                        break
+            finally:
+                # 连接已关闭，无需额外处理
+                pass
     except WebSocketDisconnect:
         logger.info("WebSocket 连接断开")
     except Exception as e:

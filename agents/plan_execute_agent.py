@@ -9,6 +9,7 @@ from typing import List, Optional
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.memory import BaseMemory
 from langchain_core.tools import BaseTool
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_experimental.plan_and_execute import PlanAndExecute, load_chat_planner, load_agent_executor
 
 from schema import Message, Task, Result, MessageType, TaskStatus, ResultStatus
@@ -65,7 +66,7 @@ class LangChainPlanExecuteAgent(BaseAgent):
             elif message.message_type == MessageType.AGENT_RESPONSE:
                 self.memory.chat_memory.add_ai_message(message.content)
 
-    def act(self, task: Task) -> Result:
+    def act(self, task: Task, callbacks: List[BaseCallbackHandler] = None) -> Result:
         start_time = time.time()
         self.is_busy = True
         self.current_task = task
@@ -78,8 +79,69 @@ class LangChainPlanExecuteAgent(BaseAgent):
             if task.metadata:
                 task_description += f"\n额外信息: {task.metadata}"
 
-            # 调用Plan-and-Execute智能体
-            output = self.agent.run(task_description)
+            # 如果有回调，使用带回调的执行方式
+            if callbacks:
+                # 重新创建带回调的执行器
+                from langchain.agents import AgentExecutor, create_react_agent
+                from langchain_core.prompts import PromptTemplate
+                
+                # 创建计划执行提示模板
+                plan_template = """你是一个专业的计划制定助手。你需要制定详细的计划并逐步执行。
+
+你有以下工具可以使用：
+{tools}
+
+请按照以下步骤进行：
+1. 首先分析任务需求
+2. 制定详细的执行计划
+3. 逐步执行计划中的每个步骤
+4. 使用工具获取必要的信息
+5. 最终给出完整的解决方案
+
+使用以下格式：
+
+Question: 需要解决的问题
+Thought: 分析任务需求，制定计划
+Action: 要采取的行动，应该是[{tool_names}]中的一个
+Action Input: 行动的输入
+Observation: 行动的结果
+... (重复执行直到完成所有计划步骤)
+Thought: 我已经完成了所有计划步骤
+Final Answer: 完整的解决方案
+
+开始！
+
+Question: {input}
+Thought: {agent_scratchpad}"""
+
+                plan_prompt = PromptTemplate(
+                    template=plan_template,
+                    input_variables=["input", "agent_scratchpad", "tools", "tool_names"]
+                )
+                
+                # 创建带回调的智能体
+                agent = create_react_agent(
+                    llm=self.llm,
+                    tools=self.tools,
+                    prompt=plan_prompt
+                )
+                
+                # 创建带回调的执行器
+                executor = AgentExecutor(
+                    agent=agent,
+                    tools=self.tools,
+                    verbose=True,
+                    max_iterations=15,  # 计划任务可能需要更多迭代
+                    memory=self.memory,
+                    callbacks=callbacks,
+                    handle_parsing_errors=True
+                )
+                
+                result_data = executor.invoke({"input": task_description})
+                output = result_data.get("output", "")
+            else:
+                # 调用Plan-and-Execute智能体
+                output = self.agent.run(task_description)
 
             execution_time = time.time() - start_time
 
