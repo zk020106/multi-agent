@@ -7,7 +7,7 @@ import time
 from typing import Any, Dict, List
 
 from langchain.agents import AgentExecutor, create_react_agent
-from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.callbacks import  AsyncCallbackHandler
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.prompts import PromptTemplate
 from langchain_core.tools import BaseTool
@@ -154,7 +154,7 @@ Thought: {agent_scratchpad}"""
             elif message.message_type == MessageType.AGENT_RESPONSE:
                 self.memory.chat_memory.add_ai_message(message.content)
     
-    def act(self, task: Task, callbacks: List[BaseCallbackHandler] = None) -> Result:
+    async def act(self, task: Task, callbacks: List[AsyncCallbackHandler] = None) -> Result:
         """
         执行任务
         
@@ -229,9 +229,9 @@ Thought: {agent_scratchpad}"""
                     handle_parsing_errors=True
                 )
                 
-                result_data = executor.invoke({"input": input_text})
+                result_data = await executor.ainvoke({"input": input_text})
             else:
-                result_data = self.agent_executor.invoke({"input": input_text})
+                result_data = await self.agent_executor.ainvoke({"input": input_text})
             
             execution_time = time.time() - start_time
             

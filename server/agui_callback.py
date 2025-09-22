@@ -8,7 +8,7 @@ ag-ui 事件回调：
 import asyncio
 from typing import Any, Dict
 
-from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.callbacks import AsyncCallbackHandler
 from ag_ui.core import (
     TextMessageContentEvent,
     TextMessageStartEvent,
@@ -26,7 +26,7 @@ from ag_ui.core import (
 )
 
 
-class AguiEventStreamer(BaseCallbackHandler):
+class AguiEventStreamer(AsyncCallbackHandler):
     """ag-ui 事件流回调处理器。
 
     - 接收 LangChain 执行回调
@@ -39,6 +39,7 @@ class AguiEventStreamer(BaseCallbackHandler):
         self.queue = queue
         self.thread_id = session_id  # 使用 thread_id 而不是 session_id
         self.run_id = message_id     # 使用 run_id 而不是 message_id
+        print(f"🔧 AguiEventStreamer 初始化: thread_id={self.thread_id}, run_id={self.run_id}")
 
     async def _emit_event(self, event) -> None:
         # 使用官方 ag-ui-protocol 事件对象
@@ -137,35 +138,42 @@ class AguiEventStreamer(BaseCallbackHandler):
         self.queue.put_nowait(ag_event)
 
     # ===== LLM 输出（思考/逐token） =====
-    def on_text(self, text: str, **kwargs: Any) -> None:
+    async def on_text(self, text: str, **kwargs: Any) -> None:
+        print(f"📝 on_text 被调用: {text[:50]}...")
         # 思考片段（可用于在前端展示思维过程）
         ag_event = ThinkingTextMessageContentEvent(
             type=EventType.THINKING_TEXT_MESSAGE_CONTENT,
             delta=text
         )
-        self.queue.put_nowait(ag_event)
+        await self.queue.put(ag_event)
+        print(f"✅ on_text 事件已放入队列")
 
-    def on_llm_new_token(self, token: str, **kwargs: Any) -> None:
+    async def on_llm_new_token(self, token: str, **kwargs: Any) -> None:
+        print(f"🎯 on_llm_new_token 被调用: {token}")
         # 逐token 推送（可选开启）
         ag_event = TextMessageContentEvent(
             type=EventType.TEXT_MESSAGE_CONTENT,
             message_id=self.run_id,
             delta=token
         )
-        self.queue.put_nowait(ag_event)
+        await self.queue.put(ag_event)
+        print(f"✅ on_llm_new_token 事件已放入队列")
 
     # ===== 工具调用 =====
-    def on_tool_start(self, serialized: Dict[str, Any], input_str: str, **kwargs: Any) -> None:
+    async def on_tool_start(self, serialized: Dict[str, Any], input_str: str, **kwargs: Any) -> None:
         name = serialized.get("name") or serialized.get("id") or "tool"
+        print(f"🔧 on_tool_start 被调用: {name}, input: {input_str[:50]}...")
         ag_event = ToolCallStartEvent(
             type=EventType.TOOL_CALL_START,
             tool_call_id=f"tool_{self.run_id}",
             tool_call_name=name,
             parent_message_id=self.run_id
         )
-        self.queue.put_nowait(ag_event)
+        await self.queue.put(ag_event)
+        print(f"✅ on_tool_start 事件已放入队列")
 
-    def on_tool_end(self, output: str, **kwargs: Any) -> None:
+    async def on_tool_end(self, output: str, **kwargs: Any) -> None:
+        print(f"🔧 on_tool_end 被调用: {output[:50]}...")
         ag_event = ToolCallResultEvent(
             type=EventType.TOOL_CALL_RESULT,
             message_id=self.run_id,
@@ -173,55 +181,66 @@ class AguiEventStreamer(BaseCallbackHandler):
             content=output,
             role="tool"
         )
-        self.queue.put_nowait(ag_event)
+        await self.queue.put(ag_event)
+        print(f"✅ on_tool_end 事件已放入队列")
 
-    def on_tool_error(self, error: BaseException, **kwargs: Any) -> None:
+    async def on_tool_error(self, error: BaseException, **kwargs: Any) -> None:
+        print(f"❌ on_tool_error 被调用: {error}")
         ag_event = RunErrorEvent(
             type=EventType.RUN_ERROR,
             thread_id=self.thread_id,
             run_id=self.run_id,
             error=str(error)
         )
-        self.queue.put_nowait(ag_event)
+        await self.queue.put(ag_event)
+        print(f"✅ on_tool_error 事件已放入队列")
 
     # ===== Agent 层事件（ReAct 动作与结束） =====
-    def on_agent_action(self, action, **kwargs: Any) -> None:
+    async def on_agent_action(self, action, **kwargs: Any) -> None:
+        print(f"🤖 on_agent_action 被调用: {action}")
         # action包含 tool / tool_input / log（思考片段）
         try:
             if getattr(action, "log", None):
+                print(f"📝 Agent log: {action.log[:50]}...")
                 ag_event = ThinkingTextMessageContentEvent(
                     type=EventType.THINKING_TEXT_MESSAGE_CONTENT,
                     delta=action.log
                 )
-                self.queue.put_nowait(ag_event)
+                await self.queue.put(ag_event)
+                print(f"✅ Agent log 事件已放入队列")
             
             tool_name = getattr(action, "tool", None)
             tool_input = getattr(action, "tool_input", None)
             if tool_name:
+                print(f"🔧 Agent tool: {tool_name}, input: {tool_input[:50] if tool_input else 'None'}...")
                 ag_event = ToolCallStartEvent(
                     type=EventType.TOOL_CALL_START,
                     tool_call_id=f"tool_{self.run_id}",
                     tool_call_name=tool_name,
                     parent_message_id=self.run_id
                 )
-                self.queue.put_nowait(ag_event)
-        except Exception:
-            pass
+                await self.queue.put(ag_event)
+                print(f"✅ Agent tool 事件已放入队列")
+        except Exception as e:
+            print(f"❌ on_agent_action 错误: {e}")
 
-    def on_agent_finish(self, finish, **kwargs: Any) -> None:
+    async def on_agent_finish(self, finish, **kwargs: Any) -> None:
+        print(f"🏁 on_agent_finish 被调用: {finish}")
         try:
             output = None
             if hasattr(finish, "return_values") and isinstance(finish.return_values, dict):
                 output = finish.return_values.get("output")
             
             if output:
+                print(f"📝 Agent output: {output[:50]}...")
                 ag_event = TextMessageContentEvent(
                     type=EventType.TEXT_MESSAGE_CONTENT,
                     message_id=self.run_id,
                     delta=output
                 )
-                self.queue.put_nowait(ag_event)
-        except Exception:
-            pass
+                await self.queue.put(ag_event)
+                print(f"✅ Agent output 事件已放入队列")
+        except Exception as e:
+            print(f"❌ on_agent_finish 错误: {e}")
 
 

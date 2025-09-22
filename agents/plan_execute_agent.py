@@ -9,7 +9,7 @@ from typing import List, Optional
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.memory import BaseMemory
 from langchain_core.tools import BaseTool
-from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.callbacks import  AsyncCallbackHandler
 from langchain_experimental.plan_and_execute import PlanAndExecute, load_chat_planner, load_agent_executor
 
 from schema import Message, Task, Result, MessageType, TaskStatus, ResultStatus
@@ -66,7 +66,7 @@ class LangChainPlanExecuteAgent(BaseAgent):
             elif message.message_type == MessageType.AGENT_RESPONSE:
                 self.memory.chat_memory.add_ai_message(message.content)
 
-    def act(self, task: Task, callbacks: List[BaseCallbackHandler] = None) -> Result:
+    async def act(self, task: Task, callbacks: List[AsyncCallbackHandler] = None) -> Result:
         start_time = time.time()
         self.is_busy = True
         self.current_task = task
@@ -137,7 +137,7 @@ Thought: {agent_scratchpad}"""
                     handle_parsing_errors=True
                 )
                 
-                result_data = executor.invoke({"input": task_description})
+                result_data = await executor.ainvoke({"input": task_description})
                 output = result_data.get("output", "")
             else:
                 # 调用Plan-and-Execute智能体

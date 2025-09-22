@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.memory import BaseMemory
 from langchain_core.tools import BaseTool
@@ -35,7 +35,7 @@ class BaseAgent(ABC):
         tools: List[BaseTool] = None,
         memory: BaseMemory = None,
         system_prompt: str = "",
-        callbacks: List[BaseCallbackHandler] = None
+        callbacks: List[AsyncCallbackHandler] = None
     ):
         """
         初始化智能体

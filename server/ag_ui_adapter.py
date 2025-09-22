@@ -176,46 +176,40 @@ async def agui_chat_stream(req: ChatRequest):
         # 创建事件流处理器，传入 session_id 和 message_id
         callbacks = [AguiEventStreamer(queue, session_id=req.session_id, message_id=message_id)]
         
-        # 起始事件
-        start_event = RunStartedEvent(
+        # 修复：确保任务执行和事件消费真正并发
+        task = Task(id=f"task_{req.session_id}", title="AGUI Chat", description=prompt, priority=_priority_from_str(req.priority))
+        
+        # 发送连通性确认
+        yield encoder.encode(RunStartedEvent(
+            type=EventType.RUN_STARTED,
             thread_id=req.session_id,
             run_id=message_id
-        )
-        yield encoder.encode(start_event).encode("utf-8")
+        )).encode("utf-8")
         
-        # run task in background and stream callbacks
-        task = Task(id=f"task_{req.session_id}", title="AGUI Chat", description=prompt, priority=_priority_from_str(req.priority))
+        # 启动任务执行（在后台运行）- 使用asyncio.create_task确保真正并发
         run_coro = system.execute_task(_coordinator_id, task, callbacks=callbacks)
         runner = asyncio.create_task(run_coro)
-
-        try:
-            # 修复：使用稳健的SSE模板，Consumer在连接建立后立即进入阻塞等待
-            # 发送连通性确认
-            yield encoder.encode(RunStartedEvent(
-                type=EventType.RUN_STARTED,
-                thread_id=req.session_id,
-                run_id=message_id
-            )).encode("utf-8")
-            
-            while True:
-                try:
-                    # 阻塞等待事件到达，这里会一直等待直到有事件
-                    ag_event = await asyncio.wait_for(queue.get(), timeout=10.0)  # 10秒超时用于心跳
-                    yield encoder.encode(ag_event).encode("utf-8")
-                    
-                    # 检查是否是结束事件，如果是则关闭连接
-                    if ag_event.type == EventType.RUN_FINISHED:
-                        break
-                        
-                except asyncio.TimeoutError:
-                    # 发送心跳保持连接活跃
-                    yield b":\n\n"
-                except Exception as e:
-                    print(f"事件生成器错误: {e}")
+        
+        # 事件消费循环 - 与任务执行真正并发运行
+        while True:
+            try:
+                # 阻塞等待事件到达，这里会一直等待直到有事件
+                ag_event = await asyncio.wait_for(queue.get(), timeout=10.0)  # 10秒超时用于心跳
+                yield encoder.encode(ag_event).encode("utf-8")
+                
+                # 检查是否是结束事件，如果是则关闭连接
+                if ag_event.type == EventType.RUN_FINISHED:
                     break
-        finally:
-            # 连接已关闭，无需额外处理
-            pass
+                    
+            except asyncio.TimeoutError:
+                # 发送心跳保持连接活跃
+                yield b":\n\n"
+            except Exception as e:
+                print(f"事件生成器错误: {e}")
+                break
+            finally:
+                # 连接已关闭，无需额外处理
+                pass
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
