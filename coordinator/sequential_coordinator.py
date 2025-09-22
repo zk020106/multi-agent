@@ -195,7 +195,7 @@ class SequentialCoordinator(BaseCoordinator):
             except Exception:
                 pass
 
-            result = await self._execute_with_agent(task, agent)
+            result = await self._execute_with_agent(task, agent, callbacks)
             
             # 完成任务
             self.complete_task(task, result)
@@ -300,20 +300,30 @@ class SequentialCoordinator(BaseCoordinator):
         return selected_agent
 
     @handle_errors
-    async def _execute_with_agent(self, task: Task, agent: BaseAgent) -> Result:
+    async def _execute_with_agent(self, task: Task, agent: BaseAgent, callbacks: List[Any] = None) -> Result:
         """
         使用智能体执行任务
 
         Args:
             task: 任务对象
             agent: 智能体实例
+            callbacks: 回调函数列表
 
         Returns:
             执行结果
         """
         try:
             # 执行任务
-            result = agent.act(task)
+            if callbacks and hasattr(agent, 'act'):
+                # 检查 act 方法是否支持 callbacks 参数
+                import inspect
+                sig = inspect.signature(agent.act)
+                if 'callbacks' in sig.parameters:
+                    result = agent.act(task, callbacks=callbacks)
+                else:
+                    result = agent.act(task)
+            else:
+                result = agent.act(task)
 
             # 等待执行完成（如果是异步的）
             if asyncio.iscoroutine(result):

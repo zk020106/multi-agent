@@ -7,6 +7,7 @@ import time
 from typing import Any, Dict, List
 
 from langchain.agents import AgentExecutor, create_react_agent
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.prompts import PromptTemplate
 from langchain_core.tools import BaseTool
@@ -153,7 +154,7 @@ Thought: {agent_scratchpad}"""
             elif message.message_type == MessageType.AGENT_RESPONSE:
                 self.memory.chat_memory.add_ai_message(message.content)
     
-    def act(self, task: Task) -> Result:
+    def act(self, task: Task, callbacks: List[BaseCallbackHandler] = None) -> Result:
         """
         执行任务
         
@@ -179,7 +180,58 @@ Thought: {agent_scratchpad}"""
                 input_text += f"\n额外信息: {task.metadata}"
             
             # 执行ReAct循环
-            result_data = self.agent_executor.invoke({"input": input_text})
+            if callbacks:
+                # 如果有回调，重新创建带回调的执行器
+                from langchain.agents import AgentExecutor, create_react_agent
+                from langchain_core.prompts import PromptTemplate
+                
+                # 创建ReAct提示模板
+                react_template = """你是一个专业的助手。你有以下工具可以使用：
+
+{tools}
+
+使用以下格式：
+
+Question: 需要回答的问题
+Thought: 你应该总是思考要做什么
+Action: 要采取的行动，应该是[{tool_names}]中的一个
+Action Input: 行动的输入
+Observation: 行动的结果
+... (这个思考/行动/观察可以重复N次)
+Thought: 我现在知道最终答案了
+Final Answer: 原始问题的最终答案
+
+开始！
+
+Question: {input}
+Thought: {agent_scratchpad}"""
+
+                react_prompt = PromptTemplate(
+                    template=react_template,
+                    input_variables=["input", "agent_scratchpad", "tools", "tool_names"]
+                )
+                
+                # 创建带回调的ReAct智能体
+                agent = create_react_agent(
+                    llm=self.llm,
+                    tools=self.tools,
+                    prompt=react_prompt
+                )
+                
+                # 创建带回调的执行器
+                executor = AgentExecutor(
+                    agent=agent,
+                    tools=self.tools,
+                    verbose=self.verbose,
+                    max_iterations=self.max_iterations,
+                    memory=self.memory,
+                    callbacks=callbacks,
+                    handle_parsing_errors=True
+                )
+                
+                result_data = executor.invoke({"input": input_text})
+            else:
+                result_data = self.agent_executor.invoke({"input": input_text})
             
             execution_time = time.time() - start_time
             

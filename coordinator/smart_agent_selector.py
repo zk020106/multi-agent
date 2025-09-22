@@ -113,19 +113,22 @@ class CapabilityBasedSelector(BaseAgentSelector):
         
         # 定义能力关键词映射
         capability_keywords = {
-            "计算": ["math", "calculate", "compute", "arithmetic"],
-            "搜索": ["search", "find", "lookup", "query"],
-            "编程": ["code", "program", "script", "python", "javascript"],
-            "分析": ["analyze", "analysis", "process", "evaluate"],
-            "翻译": ["translate", "translation", "language"],
-            "写作": ["write", "compose", "create", "generate"],
-            "总结": ["summarize", "summary", "abstract"],
-            "问答": ["question", "answer", "qa", "help"]
+            "计算": ["math", "calculate", "compute", "arithmetic", "计算", "数学"],
+            "搜索": ["search", "find", "lookup", "query", "搜索", "查找"],
+            "编程": ["code", "program", "script", "python", "javascript", "编程", "代码"],
+            "分析": ["analyze", "analysis", "process", "evaluate", "分析", "评估"],
+            "翻译": ["translate", "translation", "language", "翻译", "语言"],
+            "写作": ["write", "compose", "create", "generate", "写", "创作", "生成"],
+            "总结": ["summarize", "summary", "abstract", "总结", "摘要"],
+            "问答": ["question", "answer", "qa", "help", "问题", "回答", "帮助"],
+            "计划": ["plan", "planning", "schedule", "itinerary", "计划", "规划", "行程", "安排", "攻略"],
+            "组织": ["organize", "organization", "structure", "组织", "结构化", "整理"],
+            "项目管理": ["project", "management", "coordinate", "项目", "管理", "协调"]
         }
         
         for capability, keywords in capability_keywords.items():
             if any(keyword in task_text for keyword in keywords):
-                if capability in ["计算", "搜索", "编程"]:  # 核心能力
+                if capability in ["计算", "搜索", "编程", "计划", "组织", "项目管理"]:  # 核心能力
                     required_capabilities.append(capability)
                 else:
                     preferred_capabilities.append(capability)

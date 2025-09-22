@@ -3,10 +3,28 @@ import json
 import asyncio
 import logging
 import os
+import time
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
+
+from ag_ui.core import (
+    TextMessageContentEvent,
+    TextMessageStartEvent,
+    TextMessageEndEvent,
+    ToolCallStartEvent,
+    ToolCallEndEvent,
+    ToolCallResultEvent,
+    ThinkingStartEvent,
+    ThinkingEndEvent,
+    ThinkingTextMessageContentEvent,
+    RunStartedEvent,
+    RunFinishedEvent,
+    RunErrorEvent,
+    EventType
+)
+from ag_ui.encoder import EventEncoder
 
 from enhanced_main import EnhancedMultiAgentSystem
 from schema import Task, TaskPriority
@@ -58,22 +76,40 @@ def _ensure_system() -> EnhancedMultiAgentSystem:
         # 优先使用项目根目录 config.yaml
         cfg_path = os.path.join(os.getcwd(), "config.yaml")
         _system = EnhancedMultiAgentSystem(cfg_path if os.path.exists(cfg_path) else None)
-        # 引导：创建一个默认ReAct智能体与顺序协调器
+        # 引导：创建多个智能体与顺序协调器
         try:
             from agents import AgentType
-            # 若不存在则创建默认智能体与协调器
+            # 创建ReAct智能体
             _system.create_agent(
                 agent_type=AgentType.REACT,
                 agent_id="react_default",
                 name="默认推理智能体",
                 description="通用推理与工具使用"
             )
+            # 创建Plan智能体
+            _system.create_agent(
+                agent_type=AgentType.PLAN_EXECUTE,
+                agent_id="plan_default",
+                name="默认计划智能体",
+                description="擅长制定计划和执行复杂任务"
+            )
+            # 创建Tool智能体
+            _system.create_agent(
+                agent_type=AgentType.TOOL,
+                agent_id="tool_default",
+                name="默认工具智能体",
+                description="专门执行工具操作"
+            )
+            
             coord = _system.create_coordinator(
                 coordinator_type="sequential",
                 coordinator_id=_coordinator_id,
                 name="HTTP协调器"
             )
+            # 添加所有智能体到协调器
             _system.add_agent_to_coordinator(_coordinator_id, "react_default", role="reasoning")
+            _system.add_agent_to_coordinator(_coordinator_id, "plan_default", role="planning")
+            _system.add_agent_to_coordinator(_coordinator_id, "tool_default", role="execution")
         except Exception as e:
             logger.error(f"初始化系统失败: {e}")
     return _system
@@ -89,6 +125,14 @@ def _build_probe_payload() -> Dict[str, Any]:
 async def root_probe():
     """根路径探针，输出项目信息。"""
     return JSONResponse(_build_probe_payload())
+
+
+@app.get("/agui/status")
+async def agui_status():
+    """获取系统状态，包括智能体信息。"""
+    system = _ensure_system()
+    status = system.get_system_status()
+    return JSONResponse(status)
 
 
 def _extract_user_prompt(messages: List[ChatMessage]) -> str:
@@ -126,9 +170,19 @@ async def agui_chat_stream(req: ChatRequest):
 
     async def event_stream() -> AsyncGenerator[bytes, None]:
         queue: asyncio.Queue = asyncio.Queue()
-        callbacks = [AguiEventStreamer(queue)]
+        encoder = EventEncoder()
+        message_id = f"msg_{req.session_id}_{int(time.time())}"
+        
+        # 创建事件流处理器，传入 session_id 和 message_id
+        callbacks = [AguiEventStreamer(queue, session_id=req.session_id, message_id=message_id)]
+        
         # 起始事件
-        yield b"event: start\ndata: {\"status\":\"started\"}\n\n"
+        start_event = RunStartedEvent(
+            thread_id=req.session_id,
+            run_id=message_id
+        )
+        yield encoder.encode(start_event).encode("utf-8")
+        
         # run task in background and stream callbacks
         task = Task(id=f"task_{req.session_id}", title="AGUI Chat", description=prompt, priority=_priority_from_str(req.priority))
         run_coro = system.execute_task(_coordinator_id, task, callbacks=callbacks)
@@ -139,17 +193,28 @@ async def agui_chat_stream(req: ChatRequest):
                 done, _ = await asyncio.wait({runner}, timeout=0.01)
                 # drain queue
                 while not queue.empty():
-                    evt = await queue.get()
-                    yield f"event: {evt['event']}\ndata: {json.dumps(evt, ensure_ascii=False)}\n\n".encode("utf-8")
+                    ag_event = await queue.get()
+                    # 使用 EventEncoder 编码事件
+                    yield encoder.encode(ag_event).encode("utf-8")
                 if runner in done:
                     result = runner.result()
                     content = result.data.get("output") if result and result.data else (result.error_message if result else "")
-                    payload = ChatResponse(session_id=req.session_id, content=content or "").model_dump()
-                    yield f"event: message\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+                    
+                    # 发送最终消息内容
+                    if content:
+                        final_event = TextMessageContentEvent(
+                            message_id=message_id,
+                            delta=content
+                        )
+                        yield encoder.encode(final_event).encode("utf-8")
                     break
         finally:
             # 结束事件
-            yield b"event: end\ndata: {\"status\":\"completed\"}\n\n"
+            end_event = RunFinishedEvent(
+                thread_id=req.session_id,
+                run_id=message_id
+            )
+            yield encoder.encode(end_event).encode("utf-8")
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -166,30 +231,52 @@ async def agui_chat_ws(ws: WebSocket):
             prompt = _extract_user_prompt(messages)
             task = Task(id=f"task_{session_id}", title="AGUI Chat", description=prompt, priority=_priority_from_str(data.get("priority")))
 
-            await ws.send_json({"event": "start", "session_id": session_id})
+            message_id = f"msg_{session_id}_{int(time.time())}"
+            
+            # 发送开始事件
+            start_event = RunStartedEvent(
+                thread_id=session_id,
+                run_id=message_id
+            )
+            await ws.send_json(start_event.model_dump())
+            
             queue: asyncio.Queue = asyncio.Queue()
-            callbacks = [AguiEventStreamer(queue)]
+            callbacks = [AguiEventStreamer(queue, session_id=session_id, message_id=message_id)]
             run_coro = system.execute_task(_coordinator_id, task, callbacks=callbacks)
             runner = asyncio.create_task(run_coro)
             try:
                 while True:
                     done, _ = await asyncio.wait({runner}, timeout=0.01)
                     while not queue.empty():
-                        evt = await queue.get()
-                        await ws.send_json(evt)  # 直接透传事件给前端
+                        ag_event = await queue.get()
+                        # 直接发送事件字典给前端
+                        await ws.send_json(ag_event.model_dump())
                     if runner in done:
                         result = runner.result()
                         content = result.data.get("output") if result and result.data else (result.error_message if result else "")
-                        await ws.send_json({
-                            "event": "message",
-                            "session_id": session_id,
-                            "content": content or ""
-                        })
+                        
+                        # 发送最终消息内容
+                        if content:
+                            final_event = TextMessageContentEvent(
+                                message_id=message_id,
+                                delta=content
+                            )
+                            await ws.send_json(final_event.model_dump())
                         break
             finally:
-                await ws.send_json({"event": "end", "session_id": session_id})
+                # 发送结束事件
+                end_event = RunFinishedEvent(
+                    thread_id=session_id,
+                    run_id=message_id
+                )
+                await ws.send_json(end_event.model_dump())
     except WebSocketDisconnect:
         logger.info("WebSocket 连接断开")
     except Exception as e:
-        await ws.send_json({"event": "error", "message": str(e)})
+        error_event = RunErrorEvent(
+            thread_id=session_id if 'session_id' in locals() else "unknown",
+            run_id=message_id if 'message_id' in locals() else None,
+            error=str(e)
+        )
+        await ws.send_json(error_event.model_dump())
 
