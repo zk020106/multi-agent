@@ -163,6 +163,7 @@ class AguiEventStreamer(AsyncCallbackHandler):
     async def on_tool_start(self, serialized: Dict[str, Any], input_str: str, **kwargs: Any) -> None:
         name = serialized.get("name") or serialized.get("id") or "tool"
         print(f"🔧 on_tool_start 被调用: {name}, input: {input_str[:50]}...")
+        print(f"🔧 工具调用参数: serialized={serialized}, kwargs={kwargs}")
         ag_event = ToolCallStartEvent(
             type=EventType.TOOL_CALL_START,
             tool_call_id=f"tool_{self.run_id}",
@@ -174,15 +175,25 @@ class AguiEventStreamer(AsyncCallbackHandler):
 
     async def on_tool_end(self, output: str, **kwargs: Any) -> None:
         print(f"🔧 on_tool_end 被调用: {output[:50]}...")
-        ag_event = ToolCallResultEvent(
+        
+        # 发送工具调用结束事件
+        end_event = ToolCallEndEvent(
+            type=EventType.TOOL_CALL_END,
+            tool_call_id=f"tool_{self.run_id}"
+        )
+        await self.queue.put(end_event)
+        print(f"✅ on_tool_end 结束事件已放入队列")
+        
+        # 发送工具调用结果事件
+        result_event = ToolCallResultEvent(
             type=EventType.TOOL_CALL_RESULT,
             message_id=self.run_id,
             tool_call_id=f"tool_{self.run_id}",
             content=output,
             role="tool"
         )
-        await self.queue.put(ag_event)
-        print(f"✅ on_tool_end 事件已放入队列")
+        await self.queue.put(result_event)
+        print(f"✅ on_tool_end 结果事件已放入队列")
 
     async def on_tool_error(self, error: BaseException, **kwargs: Any) -> None:
         print(f"❌ on_tool_error 被调用: {error}")
@@ -194,6 +205,55 @@ class AguiEventStreamer(AsyncCallbackHandler):
         )
         await self.queue.put(ag_event)
         print(f"✅ on_tool_error 事件已放入队列")
+
+    # ===== 同步工具调用回调（备用） =====
+    def on_tool_start_sync(self, serialized: Dict[str, Any], input_str: str, **kwargs: Any) -> None:
+        """同步版本的工具开始回调"""
+        name = serialized.get("name") or serialized.get("id") or "tool"
+        print(f"🔧 [SYNC] on_tool_start 被调用: {name}, input: {input_str[:50]}...")
+        ag_event = ToolCallStartEvent(
+            type=EventType.TOOL_CALL_START,
+            tool_call_id=f"tool_{self.run_id}",
+            tool_call_name=name,
+            parent_message_id=self.run_id
+        )
+        self.queue.put_nowait(ag_event)
+        print(f"✅ [SYNC] on_tool_start 事件已放入队列")
+
+    def on_tool_end_sync(self, output: str, **kwargs: Any) -> None:
+        """同步版本的工具结束回调"""
+        print(f"🔧 [SYNC] on_tool_end 被调用: {output[:50]}...")
+        
+        # 发送工具调用结束事件
+        end_event = ToolCallEndEvent(
+            type=EventType.TOOL_CALL_END,
+            tool_call_id=f"tool_{self.run_id}"
+        )
+        self.queue.put_nowait(end_event)
+        print(f"✅ [SYNC] on_tool_end 结束事件已放入队列")
+        
+        # 发送工具调用结果事件
+        result_event = ToolCallResultEvent(
+            type=EventType.TOOL_CALL_RESULT,
+            message_id=self.run_id,
+            tool_call_id=f"tool_{self.run_id}",
+            content=output,
+            role="tool"
+        )
+        self.queue.put_nowait(result_event)
+        print(f"✅ [SYNC] on_tool_end 结果事件已放入队列")
+
+    def on_tool_error_sync(self, error: BaseException, **kwargs: Any) -> None:
+        """同步版本的工具错误回调"""
+        print(f"❌ [SYNC] on_tool_error 被调用: {error}")
+        ag_event = RunErrorEvent(
+            type=EventType.RUN_ERROR,
+            thread_id=self.thread_id,
+            run_id=self.run_id,
+            error=str(error)
+        )
+        self.queue.put_nowait(ag_event)
+        print(f"✅ [SYNC] on_tool_error 事件已放入队列")
 
     # ===== Agent 层事件（ReAct 动作与结束） =====
     async def on_agent_action(self, action, **kwargs: Any) -> None:

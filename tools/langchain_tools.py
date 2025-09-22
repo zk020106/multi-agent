@@ -420,6 +420,28 @@ class SerperSearchTool(BaseTool):
         except Exception as e:
             return f"Serper 搜索失败: {str(e)}"
 
+    async def _arun(
+        self,
+        query: str,
+        gl: Optional[str] = "us",
+        hl: Optional[str] = "en",
+        num: Optional[int] = 10,
+        api_key: Optional[str] = None,
+        **kwargs
+    ) -> str:
+        """异步执行搜索"""
+        # 使用 asyncio.to_thread 在线程池中运行同步方法
+        import asyncio
+        return await asyncio.to_thread(
+            self._run,
+            query=query,
+            gl=gl,
+            hl=hl,
+            num=num,
+            api_key=api_key,
+            **kwargs
+        )
+
 
 class CalculatorToolInput(BaseModel):
     """计算器工具输入模型"""
@@ -463,6 +485,19 @@ class CalculatorTool(BaseTool):
             return "错误: 表达式语法错误"
         except Exception as e:
             return f"计算失败: {str(e)}"
+
+    async def _arun(
+        self,
+        expression: str,
+        **kwargs
+    ) -> str:
+        """异步执行数学计算"""
+        import asyncio
+        return await asyncio.to_thread(
+            self._run,
+            expression=expression,
+            **kwargs
+        )
 
 
 # 工具注册表
