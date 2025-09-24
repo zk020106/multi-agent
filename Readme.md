@@ -1,5 +1,5 @@
 # 多智能体系统（增强版，含 ag-ui 适配）
-
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/zk020106/multi-agent)
 ## 🧭 概述
 - 基于 LangChain 的多智能体系统，支持 ReAct、Plan-and-Execute、工具驱动等智能体形式。
 - 统一 YAML 配置（config.yaml），代码默认值由 utils.config 提供，YAML 优先级更高。
